@@ -249,6 +249,10 @@ set(ayugram_files
         ayu/features/filters/filters_utils.h
         ayu/data/messages_storage.cpp
         ayu/data/messages_storage.h
+        ayu/data/deleted_restore.cpp
+        ayu/data/deleted_restore.h
+        ayu/data/deleted_slice_restore.cpp
+        ayu/data/deleted_slice_restore.h
         ayu/data/entities.h
         ayu/data/ayu_database.cpp
         ayu/data/ayu_database.h

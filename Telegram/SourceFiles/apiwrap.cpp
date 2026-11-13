@@ -111,6 +111,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "ayu/ayu_worker.h"
+#include "ayu/data/deleted_slice_restore.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "ayu/features/forward/ayu_forward.h"
 
@@ -3673,6 +3674,11 @@ void ApiWrap::requestHistory(
 				messageId,
 				slice,
 				result);
+			AyuMessages::RestoreDeletedIntoMessageIds(
+				history,
+				parsed.messageIds,
+				parsed.noSkipRange,
+				messageId);
 			history->messages().addSlice(
 				std::move(parsed.messageIds),
 				parsed.noSkipRange,

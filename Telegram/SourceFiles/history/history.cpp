@@ -86,6 +86,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "ayu/ayu_state.h"
+#include "ayu/data/deleted_slice_restore.h"
 
 
 namespace {
@@ -95,6 +96,19 @@ constexpr auto kSkipCloudDraftsFor = TimeId(2);
 constexpr auto kCountUnreadMessagesLimit = 10000;
 
 using UpdateFlag = Data::HistoryUpdate::Flag;
+
+void MarkRestoredDeleted(
+		const std::vector<not_null<HistoryItem*>> &items,
+		const base::flat_set<MsgId> &restoredIds) {
+	if (restoredIds.empty()) {
+		return;
+	}
+	for (const auto &item : items) {
+		if (!item->isDeleted() && restoredIds.contains(item->id)) {
+			item->setDeleted();
+		}
+	}
+}
 
 [[nodiscard]] HistoryItemCommonFields WithLocalFlag(
 		HistoryItemCommonFields fields) {
@@ -1850,13 +1864,21 @@ void History::addEdgesToSharedMedia() {
 }
 
 void History::addOlderSlice(const QVector<MTPMessage> &slice) {
+	const auto prepared = AyuMessages::PrepareSliceWithDeleted(
+		this,
+		slice,
+		false,
+		loadedAtBottom());
 	if (slice.isEmpty()) {
 		_loadedAtTop = true;
-		checkLocalMessages();
-		return;
+		if (prepared.messages.isEmpty()) {
+			checkLocalMessages();
+			return;
+		}
 	}
 
-	if (const auto added = createItems(slice); !added.empty()) {
+	if (const auto added = createItems(prepared.messages); !added.empty()) {
+		MarkRestoredDeleted(added, prepared.restoredIds);
 		addCreatedOlderSlice(added);
 	} else {
 		// If no items were added it means we've loaded everything old.
@@ -1889,6 +1911,11 @@ void History::addCreatedOlderSlice(
 }
 
 void History::addNewerSlice(const QVector<MTPMessage> &slice) {
+	const auto prepared = AyuMessages::PrepareSliceWithDeleted(
+		this,
+		slice,
+		true,
+		slice.isEmpty() || loadedAtBottom());
 	bool wasLoadedAtBottom = loadedAtBottom();
 
 	if (slice.isEmpty()) {
@@ -1898,9 +1925,10 @@ void History::addNewerSlice(const QVector<MTPMessage> &slice) {
 		}
 	}
 
-	if (const auto added = createItems(slice); !added.empty()) {
+	if (const auto added = createItems(prepared.messages); !added.empty()) {
 		Assert(!isBuildingFrontBlock());
 
+		MarkRestoredDeleted(added, prepared.restoredIds);
 		for (const auto &item : added) {
 			addItemToBlock(item);
 		}

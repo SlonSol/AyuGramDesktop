@@ -27,6 +27,7 @@ bool hasRevisions(ID userId, ID dialogId, ID messageId);
 
 void addDeletedMessage(const DeletedMessage &message);
 std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery = "");
+std::vector<DeletedMessage> getDeletedMessagesInRange(ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit);
 bool hasDeletedMessages(ID userId, ID dialogId, ID topicId);
 void removeDeletedMessage(ID userId, ID dialogId, ID messageId);
 void clearDeletedMessages(ID userId, ID dialogId, ID topicId);

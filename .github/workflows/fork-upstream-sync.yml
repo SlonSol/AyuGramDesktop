@@ -1,0 +1,52 @@
+# Once a week, merge AyuGram/AyuGramDesktop dev into this fork's dev.
+#
+# A clean merge is pushed straight to dev. Conflicts are not pushed: the
+# upstream commit is published on upstream-sync/<date> and a pull request
+# (or an issue, if the pull request cannot be opened) is created in this fork.
+#
+# Pushes made with GITHUB_TOKEN do not start other workflows, and workflow_run
+# is not started by those pushes either. After a clean push this workflow
+# dispatches Fork macOS build with the API. workflow_dispatch is allowed to
+# start from GITHUB_TOKEN.
+#
+# This file is named so it does not collide with upstream workflows.
+
+name: Fork upstream sync
+
+on:
+  schedule:
+    # Monday 06:17 UTC, off the hour so it misses the schedule stampede.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: fork-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge AyuGram dev
+    if: github.repository == 'SlonSol/AyuGramDesktop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v5
+        with:
+          ref: dev
+          fetch-depth: 0
+          persist-credentials: true
+          submodules: false
+
+      - name: Merge upstream and report conflicts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORK_REPO: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash .github/scripts/fork-upstream-sync.sh

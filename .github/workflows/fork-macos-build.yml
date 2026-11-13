@@ -142,10 +142,14 @@ jobs:
       - name: Package disk image
         run: |
           set -euo pipefail
-          app="tdesktop/out/Debug/Telegram.app"
-          binary="${app}/Contents/MacOS/Telegram"
+          # Xcode PRODUCT_NAME is AyuGram, so the bundle is not Telegram.app.
+          app="tdesktop/out/Debug/AyuGram.app"
+          binary="${app}/Contents/MacOS/AyuGram"
           if [[ ! -x "${binary}" ]]; then
-            echo "Telegram executable was not produced. Contents:"
+            echo "AyuGram executable was not produced at ${binary}. Contents:"
+            if [[ -d "${app}/Contents/MacOS" ]]; then
+              ls -la "${app}/Contents/MacOS"
+            fi
             find tdesktop/out -maxdepth 3 -print
             exit 1
           fi
@@ -180,16 +184,17 @@ jobs:
           artifact="${RUNNER_TEMP}/artifact"
           rm -rf "${stage}" "${artifact}"
           mkdir -p "${stage}" "${artifact}"
-          mv "${app}" "${stage}/Telegram.app"
+          staged_app="${stage}/AyuGram.app"
+          mv "${app}" "${staged_app}"
           cat > "${stage}/Как открыть.txt" <<'EOF'
           Это приложение без подписи Apple. macOS может его заблокировать.
 
-          1. Перетащите Telegram в папку «Программы».
+          1. Перетащите AyuGram в папку «Программы».
           2. Нажмите на него правой кнопкой и выберите «Открыть», затем снова «Открыть».
 
           Если macOS пишет, что файл повреждён, выполните в Терминале:
 
-          xattr -dr com.apple.quarantine /Applications/Telegram.app
+          xattr -dr com.apple.quarantine /Applications/AyuGram.app
 
           Если приложение лежит в другом месте, подставьте свой путь.
           EOF
@@ -198,7 +203,7 @@ jobs:
           if ! hdiutil create -volname "AyuGram" -srcfolder "${stage}" -ov -format UDZO "${artifact}/AyuGram-mac.dmg"; then
             echo "Could not create a disk image. Packing a zip of the app instead."
             rm -f "${artifact}/AyuGram-mac.dmg"
-            ditto -c -k --keepParent "${stage}/Telegram.app" "${artifact}/AyuGram-mac.zip"
+            ditto -c -k --keepParent "${staged_app}" "${artifact}/AyuGram-mac.zip"
           fi
           if [[ ! -f "${artifact}/AyuGram-mac.dmg" && ! -f "${artifact}/AyuGram-mac.zip" ]]; then
             echo "Neither a disk image nor a zip was produced."
@@ -211,10 +216,10 @@ jobs:
             echo "Скачайте артефакт **AyuGram-macOS** внизу этой страницы."
             echo "Внутри архива лежит \`AyuGram-mac.dmg\` (или zip, если образ диска не собрался) и файл «Как открыть.txt»."
             echo
-            echo "Приложение без подписи. Правый клик по Telegram → «Открыть», или:"
+            echo "Приложение без подписи. Правый клик по AyuGram → «Открыть», или:"
             echo
             echo '```bash'
-            echo "xattr -dr com.apple.quarantine /Applications/Telegram.app"
+            echo "xattr -dr com.apple.quarantine /Applications/AyuGram.app"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 

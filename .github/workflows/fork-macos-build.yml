@@ -1,0 +1,242 @@
+# Build this fork for Apple Silicon and upload a disk image.
+#
+# The steps follow telegramdesktop's GitHub-hosted macOS workflow: debug
+# libraries (skip-release), then a Debug app. A Release build needs a second
+# copy of Qt and does not fit this runner. The app is ad-hoc signed so
+# Apple Silicon will launch it. It is not notarized.
+#
+# API id and hash default to the values in docs/building-mac.md. Set both
+# repository secrets TDESKTOP_API_ID and TDESKTOP_API_HASH to override them.
+# The test-only pair (api_id 17349) is not used: Telegram rejects logins
+# made with it.
+#
+# macos-latest is GitHub's current Apple Silicon image.
+# A push made with the default GITHUB_TOKEN does not start this workflow.
+# The weekly sync dispatches it instead.
+
+name: Fork macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/CONTRIBUTING.md'
+      - '.github/AyuGram.png'
+      - '.github/AyuChan.png'
+      - '.github/demos/**'
+      - '.github/scripts/fork-upstream-sync.sh'
+      - '.github/workflows/fork-upstream-sync.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: fork-macos-build
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: Build macOS app
+    if: github.repository == 'SlonSol/AyuGramDesktop'
+    runs-on: macos-latest
+    timeout-minutes: 360
+    env:
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          df -h
+          sw_vers
+          xcodebuild -version
+          sudo mdutil -a -i off || true
+          # Simulator runtimes are unused for this native build.
+          sudo rm -rf /Library/Developer/CoreSimulator || true
+          rm -rf "${HOME}/Library/Developer/CoreSimulator" || true
+          sudo rm -rf "/Library/Developer/Xcode/iOS DeviceSupport" || true
+          sudo rm -rf "/Library/Developer/Xcode/watchOS DeviceSupport" || true
+          sudo rm -rf "/Library/Developer/Xcode/tvOS DeviceSupport" || true
+          df -h
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          path: tdesktop
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /usr/local/share
+          sudo chown -R "$(whoami):admin" /usr/local/share
+          brew update
+          brew upgrade || true
+          brew install automake libtool cmake wget pkg-config gnu-tar ninja nasm meson
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          gnu_cmake="$(brew --prefix)/share/cmake/Modules/Compiler/GNU.cmake"
+          if [[ -f "${gnu_cmake}" ]]; then
+            # Smaller debug objects. The same edit is in telegramdesktop's mac.yml.
+            sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' "${gnu_cmake}"
+          fi
+
+      - name: Restore libraries cache
+        id: cache-libs
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            Libraries
+            ThirdParty
+          key: ${{ runner.os }}-${{ runner.arch }}-fork-libs-${{ hashFiles('tdesktop/Telegram/build/prepare/prepare.py', 'tdesktop/Telegram/build/qt_version.py') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-fork-libs-
+
+      - name: Build libraries
+        id: prepare
+        run: |
+          set -euo pipefail
+          # prepare.py expects the repo one level down, next to Libraries/.
+          ./tdesktop/Telegram/build/prepare/mac.sh skip-release silent
+
+      - name: Prune libraries
+        if: steps.prepare.outcome == 'success'
+        run: |
+          set -euo pipefail
+          # Same prune as telegramdesktop's mac.yml. It keeps static libraries,
+          # headers, and tools, and deletes sources so the app build has disk left.
+          find Libraries '(' '(' ! '(' -name '*.a' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -perm +111 ')' -type f ')' -o -empty ')' -delete
+          df -h
+
+      - name: Build Telegram
+        run: |
+          set -euo pipefail
+          if [[ -n "${TDESKTOP_API_ID}" || -n "${TDESKTOP_API_HASH}" ]]; then
+            if [[ -z "${TDESKTOP_API_ID}" || -z "${TDESKTOP_API_HASH}" ]]; then
+              echo "Set both TDESKTOP_API_ID and TDESKTOP_API_HASH, or neither."
+              exit 1
+            fi
+            echo "Using api_id and api_hash from repository secrets."
+          else
+            echo "Using the api_id and api_hash published in docs/building-mac.md."
+            TDESKTOP_API_ID=2040
+            TDESKTOP_API_HASH=b18441a1ff607e10a989891a5462e627
+          fi
+          cd tdesktop/Telegram
+          ./configure.sh \
+            -D CMAKE_CONFIGURATION_TYPES=Debug \
+            -D CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -D "TDESKTOP_API_ID=${TDESKTOP_API_ID}" \
+            -D "TDESKTOP_API_HASH=${TDESKTOP_API_HASH}" \
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON
+          cmake --build ../out --config Debug --parallel
+
+      - name: Package disk image
+        run: |
+          set -euo pipefail
+          app="tdesktop/out/Debug/Telegram.app"
+          binary="${app}/Contents/MacOS/Telegram"
+          if [[ ! -x "${binary}" ]]; then
+            echo "Telegram executable was not produced. Contents:"
+            find tdesktop/out -maxdepth 3 -print
+            exit 1
+          fi
+          info="$(lipo -info "${binary}")"
+          echo "${info}"
+          case "${info}" in
+            *arm64*) ;;
+            *)
+              echo "The binary has no arm64 slice, so it will not run on Apple Silicon."
+              exit 1
+              ;;
+          esac
+
+          debug_dir="$(dirname "${app}")"
+          find "${debug_dir}" -mindepth 1 -maxdepth 1 ! -name "$(basename "${app}")" -exec rm -rf {} +
+          strip -S "${binary}"
+          if [[ -f "${app}/Contents/Frameworks/Updater" ]]; then
+            strip -S "${app}/Contents/Frameworks/Updater"
+          fi
+          if [[ -f "${app}/Contents/Helpers/crashpad_handler" ]]; then
+            strip -S "${app}/Contents/Helpers/crashpad_handler"
+          fi
+
+          # Ad-hoc identity ("-"), no hardened runtime. Apple Silicon refuses an
+          # unsigned arm64 binary. --deep matches Telegram/build/build.sh.
+          codesign --force --deep --sign - \
+            --entitlements "tdesktop/Telegram/Telegram/Telegram.entitlements" \
+            "${app}"
+          codesign --verify --verbose=2 "${app}"
+
+          stage="${RUNNER_TEMP}/dmg-root"
+          artifact="${RUNNER_TEMP}/artifact"
+          rm -rf "${stage}" "${artifact}"
+          mkdir -p "${stage}" "${artifact}"
+          mv "${app}" "${stage}/Telegram.app"
+          cat > "${stage}/Как открыть.txt" <<'EOF'
+          Это приложение без подписи Apple. macOS может его заблокировать.
+
+          1. Перетащите Telegram в папку «Программы».
+          2. Нажмите на него правой кнопкой и выберите «Открыть», затем снова «Открыть».
+
+          Если macOS пишет, что файл повреждён, выполните в Терминале:
+
+          xattr -dr com.apple.quarantine /Applications/Telegram.app
+
+          Если приложение лежит в другом месте, подставьте свой путь.
+          EOF
+          cp "${stage}/Как открыть.txt" "${artifact}/Как открыть.txt"
+
+          if ! hdiutil create -volname "AyuGram" -srcfolder "${stage}" -ov -format UDZO "${artifact}/AyuGram-mac.dmg"; then
+            echo "Could not create a disk image. Packing a zip of the app instead."
+            rm -f "${artifact}/AyuGram-mac.dmg"
+            ditto -c -k --keepParent "${stage}/Telegram.app" "${artifact}/AyuGram-mac.zip"
+          fi
+          if [[ ! -f "${artifact}/AyuGram-mac.dmg" && ! -f "${artifact}/AyuGram-mac.zip" ]]; then
+            echo "Neither a disk image nor a zip was produced."
+            exit 1
+          fi
+          ls -lh "${artifact}"
+          {
+            echo "## Готовое приложение"
+            echo
+            echo "Скачайте артефакт **AyuGram-macOS** внизу этой страницы."
+            echo "Внутри архива лежит \`AyuGram-mac.dmg\` (или zip, если образ диска не собрался) и файл «Как открыть.txt»."
+            echo
+            echo "Приложение без подписи. Правый клик по Telegram → «Открыть», или:"
+            echo
+            echo '```bash'
+            echo "xattr -dr com.apple.quarantine /Applications/Telegram.app"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: AyuGram-macOS
+          path: ${{ runner.temp }}/artifact/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 1
+
+      - name: Remove the build tree
+        if: always() && steps.prepare.outcome == 'success'
+        run: rm -rf tdesktop/out
+
+      - name: Save libraries cache
+        if: always() && steps.prepare.outcome == 'success' && steps.cache-libs.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            Libraries
+            ThirdParty
+          key: ${{ steps.cache-libs.outputs.cache-primary-key }}
